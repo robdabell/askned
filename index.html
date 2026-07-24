@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ask Ned — a Tour de France chatbot</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #1e293b;
+        --border: #334155;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #eab308; /* maillot jaune */
+        --user: #38bdf8;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background: var(--bg);
+        color: var(--text);
+      }
+      header {
+        text-align: center;
+        padding: 1.5rem 1rem 0.5rem;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 1.4rem;
+      }
+      header .jersey {
+        color: var(--accent);
+      }
+      header p {
+        margin: 0.35rem 0 0;
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+      .chat {
+        width: min(680px, 92vw);
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        padding: 1rem;
+        overflow-y: auto;
+      }
+      .msg {
+        max-width: 85%;
+        padding: 0.7rem 0.9rem;
+        border-radius: 14px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+      .msg.user {
+        align-self: flex-end;
+        background: var(--user);
+        color: #0f172a;
+        border-bottom-right-radius: 4px;
+      }
+      .msg.bot {
+        align-self: flex-start;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-bottom-left-radius: 4px;
+      }
+      .msg.bot .who {
+        display: block;
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--accent);
+        margin-bottom: 0.25rem;
+      }
+      .composer {
+        width: min(680px, 92vw);
+        display: flex;
+        gap: 0.5rem;
+        padding: 0.75rem 1rem 1.25rem;
+        background: var(--bg);
+      }
+      /* Secondary panels live below the conversation. */
+      .extras {
+        width: min(680px, 92vw);
+        margin: 0 1rem 1.5rem;
+        border-top: 1px solid var(--border);
+        padding-top: 0.75rem;
+      }
+      .extras-label {
+        color: var(--muted);
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin: 0 0 0.25rem 0.9rem;
+      }
+      textarea {
+        flex: 1;
+        resize: none;
+        font-family: inherit;
+        font-size: 1rem;
+        padding: 0.7rem 0.8rem;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        max-height: 140px;
+      }
+      button {
+        font-size: 1rem;
+        font-weight: 600;
+        padding: 0 1.1rem;
+        border-radius: 10px;
+        border: none;
+        background: var(--accent);
+        color: #0f172a;
+        cursor: pointer;
+        transition: background 0.15s, opacity 0.15s;
+      }
+      button:hover:not(:disabled) {
+        background: #ca9a04;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* Route visuals panel */
+      .route-panel {
+        width: min(680px, 92vw);
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        margin: 0.5rem 1rem 0;
+        padding: 0 0.9rem;
+      }
+      .route-panel summary {
+        cursor: pointer;
+        padding: 0.7rem 0;
+        font-weight: 600;
+        color: var(--accent);
+        list-style: none;
+      }
+      .route-panel summary::-webkit-details-marker {
+        display: none;
+      }
+      .route-controls {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 0.5rem;
+      }
+      .route-controls select {
+        flex: 1;
+        min-width: 200px;
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.5rem;
+        font-size: 0.95rem;
+      }
+      .route-panel a {
+        color: var(--user);
+        font-size: 0.85rem;
+        white-space: nowrap;
+        text-decoration: none;
+      }
+      .route-panel a:hover {
+        text-decoration: underline;
+      }
+      .route-caption {
+        color: var(--muted);
+        font-size: 0.85rem;
+        margin: 0.25rem 0 0.5rem;
+      }
+      .route-embed {
+        width: 100%;
+        height: 520px;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #fff;
+        margin-bottom: 0.8rem;
+      }
+      .route-embed iframe {
+        width: 100%;
+        height: 100%;
+        border: 0;
+      }
+      .route-map {
+        display: block;
+        width: 100%;
+        max-height: 520px;
+        object-fit: contain;
+        border-radius: 8px;
+        background: #fff;
+        margin-bottom: 0.6rem;
+      }
+      .route-note {
+        color: var(--muted);
+        font-size: 0.85rem;
+        margin: 0 0 0.5rem;
+      }
+      .route-note code {
+        color: var(--accent);
+      }
+      .route-links {
+        margin: 0 0 0.6rem;
+      }
+
+      /* Sources list */
+      .src-group {
+        margin-bottom: 0.7rem;
+      }
+      .src-group h4 {
+        margin: 0.5rem 0 0.2rem;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--accent);
+      }
+      .src-item {
+        padding: 0.4rem 0;
+        border-top: 1px solid var(--border);
+      }
+      .src-item a {
+        color: var(--user);
+        text-decoration: none;
+        font-weight: 600;
+        font-size: 0.95rem;
+      }
+      .src-item a:hover {
+        text-decoration: underline;
+      }
+      .src-item .src-focus {
+        display: block;
+        color: var(--muted);
+        font-size: 0.8rem;
+        margin-top: 0.1rem;
+      }
+      .src-item .src-note {
+        display: block;
+        color: #64748b;
+        font-size: 0.75rem;
+        font-style: italic;
+        margin-top: 0.1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Ask <span class="jersey">Ned</span></h1>
+      <p>A Tour de France chatbot with the wit of the commentary box.</p>
+    </header>
+
+    <div id="chat" class="chat"></div>
+
+    <div class="composer">
+      <textarea
+        id="input"
+        rows="1"
+        placeholder="Ask about the yellow jersey, the great climbs, the history…"
+        maxlength="4000"
+      ></textarea>
+      <button id="send">Send</button>
+    </div>
+
+    <section class="extras">
+      <p class="extras-label">Explore &amp; sources</p>
+      <details id="routePanel" class="route-panel">
+        <summary>🗺️ Route visuals — official 2026 route (letour.fr)</summary>
+        <div class="route-controls">
+          <select id="stageSelect" aria-label="Choose a stage">
+            <option value="" selected>Choose a 2026 stage…</option>
+          </select>
+          <a id="stageLink" href="https://www.letour.fr/en/overall-route" target="_blank" rel="noopener">Official stage page ↗</a>
+        </div>
+        <p id="routeCaption" class="route-caption"></p>
+        <!-- VeloViewer interactive 3D embed (shown only when a stage has a route ID) -->
+        <div id="routeEmbedWrap" class="route-embed" hidden>
+          <iframe id="routeFrame" title="VeloViewer route" scrolling="no"></iframe>
+        </div>
+        <!-- Official route map image (default view + per-stage fallback) -->
+        <img id="routeMap" class="route-map" alt="Official Tour de France 2026 route map" />
+        <p id="routeNote" class="route-note"></p>
+        <p class="route-links">
+          <a id="pdfLink" href="https://www.letour.fr/en/overall-route" target="_blank" rel="noopener">Download official route (PDF) ↗</a>
+        </p>
+      </details>
+
+      <details id="sourcesPanel" class="route-panel">
+        <summary>📰 Latest sources</summary>
+        <p class="route-note">
+          Trusted places for live standings, results and breaking news beyond this app.
+        </p>
+        <div id="sourcesList"></div>
+      </details>
+    </section>
+
+    <script>
+      const chatEl = document.getElementById("chat");
+      const input = document.getElementById("input");
+      const sendBtn = document.getElementById("send");
+
+      // Conversation history sent to the server each turn.
+      const history = [];
+
+      function addBubble(role, text) {
+        const div = document.createElement("div");
+        div.className = "msg " + (role === "user" ? "user" : "bot");
+        if (role === "assistant") {
+          const who = document.createElement("span");
+          who.className = "who";
+          who.textContent = "Ned";
+          div.appendChild(who);
+          div.appendChild(document.createTextNode(text));
+        } else {
+          div.textContent = text;
+        }
+        chatEl.appendChild(div);
+        chatEl.scrollTop = chatEl.scrollHeight;
+        return div;
+      }
+
+      // Opening line from Ned.
+      addBubble(
+        "assistant",
+        "Right then, welcome to the commentary box. I'm here to talk Tour de France — the jerseys, the mountains, the glorious madness of it all. What would you like to know?"
+      );
+
+      async function send() {
+        const text = input.value.trim();
+        if (!text) return;
+
+        addBubble("user", text);
+        history.push({ role: "user", content: text });
+        input.value = "";
+        input.style.height = "auto";
+
+        sendBtn.disabled = true;
+        sendBtn.textContent = "…";
+        const thinking = addBubble("assistant", "gathering my thoughts…");
+
+        try {
+          const res = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: history }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Request failed");
+
+          thinking.removeChild(thinking.lastChild);
+          thinking.appendChild(document.createTextNode(data.reply));
+          history.push({ role: "assistant", content: data.reply });
+        } catch (err) {
+          thinking.removeChild(thinking.lastChild);
+          thinking.appendChild(
+            document.createTextNode(
+              "Apologies — the line to the commentary box has dropped. Do try again."
+            )
+          );
+        } finally {
+          sendBtn.disabled = false;
+          sendBtn.textContent = "Send";
+          chatEl.scrollTop = chatEl.scrollHeight;
+          input.focus();
+        }
+      }
+
+      sendBtn.addEventListener("click", send);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          send();
+        }
+      });
+      // Auto-grow the textarea.
+      input.addEventListener("input", () => {
+        input.style.height = "auto";
+        input.style.height = Math.min(input.scrollHeight, 140) + "px";
+      });
+    </script>
+
+    <script>
+      // --- Route visuals (official letour.fr data + optional VeloViewer 3D) ---
+      const stageSelect = document.getElementById("stageSelect");
+      const routeFrame = document.getElementById("routeFrame");
+      const routeEmbedWrap = document.getElementById("routeEmbedWrap");
+      const routeCaption = document.getElementById("routeCaption");
+      const routeMap = document.getElementById("routeMap");
+      const routeNote = document.getElementById("routeNote");
+      const stageLink = document.getElementById("stageLink");
+      const pdfLink = document.getElementById("pdfLink");
+
+      const vvEmbedUrl = (id) => `https://veloviewer.com/routes/${id}/embed2`;
+
+      function stageOptionLabel(s) {
+        return `Stage ${s.n} · ${s.from} → ${s.to} · ${s.km} km (${s.type})`;
+      }
+
+      function showOverall(officialRouteMap) {
+        routeEmbedWrap.hidden = true;
+        routeMap.hidden = false;
+        routeMap.src = officialRouteMap;
+        routeCaption.textContent =
+          "Official 2026 Tour de France route. Pick a stage above for its details.";
+        routeNote.textContent = "";
+        stageLink.href = "https://www.letour.fr/en/overall-route";
+        stageLink.textContent = "Official route page ↗";
+      }
+
+      function showStage(stage, officialRouteMap) {
+        routeCaption.textContent =
+          `Stage ${stage.n} · ${stage.date} · ${stage.from} → ${stage.to} · ` +
+          `${stage.km} km · ${stage.type}`;
+        stageLink.href = stage.letourUrl;
+        stageLink.textContent = `Official Stage ${stage.n} page ↗`;
+
+        routeMap.hidden = true;
+        routeEmbedWrap.hidden = false;
+        if (stage.vvRouteId) {
+          // Rich inline 3D route + map from VeloViewer.
+          routeFrame.setAttribute("scrolling", "no");
+          routeFrame.src = vvEmbedUrl(stage.vvRouteId);
+          routeNote.textContent = "Interactive 3D route via VeloViewer.";
+        } else {
+          // Embed the official letour.fr stage page (interactive map + profile).
+          routeFrame.setAttribute("scrolling", "yes");
+          routeFrame.src = stage.letourUrl;
+          routeNote.innerHTML =
+            `Official <strong>Stage ${stage.n}</strong> page embedded from letour.fr ` +
+            `— scroll within for the interactive map &amp; elevation profile.`;
+        }
+      }
+
+      async function initRoutes() {
+        try {
+          const res = await fetch("/api/stages");
+          const { stages, officialRouteMap, officialRoutePdf } = await res.json();
+
+          stages.forEach((s) => {
+            const opt = document.createElement("option");
+            opt.value = String(s.n);
+            opt.textContent = stageOptionLabel(s);
+            stageSelect.appendChild(opt);
+          });
+
+          pdfLink.href = officialRoutePdf;
+          showOverall(officialRouteMap);
+
+          stageSelect.addEventListener("change", () => {
+            const s = stages.find((x) => String(x.n) === stageSelect.value);
+            if (s) showStage(s, officialRouteMap);
+            else showOverall(officialRouteMap);
+          });
+        } catch {
+          routeMap.hidden = true;
+          routeEmbedWrap.hidden = true;
+          routeNote.textContent = "Could not load the stage list.";
+        }
+      }
+
+      initRoutes();
+
+      // --- Latest sources ---
+      async function initSources() {
+        const wrap = document.getElementById("sourcesList");
+        try {
+          const res = await fetch("/api/sources");
+          const { groups } = await res.json();
+          groups.forEach((g) => {
+            const gEl = document.createElement("div");
+            gEl.className = "src-group";
+            const h = document.createElement("h4");
+            h.textContent = g.category;
+            gEl.appendChild(h);
+            g.sources.forEach((s) => {
+              const item = document.createElement("div");
+              item.className = "src-item";
+              const a = document.createElement("a");
+              a.href = s.url;
+              a.target = "_blank";
+              a.rel = "noopener";
+              a.textContent = `${s.name} ↗`;
+              const focus = document.createElement("span");
+              focus.className = "src-focus";
+              focus.textContent = s.focus;
+              item.appendChild(a);
+              item.appendChild(focus);
+              if (s.note) {
+                const note = document.createElement("span");
+                note.className = "src-note";
+                note.textContent = `Note: ${s.note}`;
+                item.appendChild(note);
+              }
+              gEl.appendChild(item);
+            });
+            wrap.appendChild(gEl);
+          });
+        } catch {
+          wrap.textContent = "Could not load sources.";
+        }
+      }
+
+      initSources();
+    </script>
+  </body>
+</html>
