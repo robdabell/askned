@@ -72,6 +72,9 @@
         border: 1px solid var(--border);
         border-bottom-left-radius: 4px;
       }
+      .msg.bot {
+        position: relative;
+      }
       .msg.bot .who {
         display: block;
         font-size: 0.7rem;
@@ -79,6 +82,34 @@
         letter-spacing: 0.05em;
         color: var(--accent);
         margin-bottom: 0.25rem;
+      }
+      .msg .copy-btn {
+        position: absolute;
+        top: 0.4rem;
+        right: 0.4rem;
+        width: auto;
+        margin: 0;
+        padding: 0.15rem 0.45rem;
+        font-size: 0.68rem;
+        font-weight: 600;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.15s, background 0.15s, color 0.15s;
+      }
+      .msg.bot:hover .copy-btn,
+      .msg .copy-btn:focus {
+        opacity: 1;
+      }
+      .msg .copy-btn:hover {
+        background: var(--border);
+        color: var(--text);
+      }
+      .msg.pending .copy-btn {
+        display: none;
       }
       .composer {
         width: min(680px, 92vw);
@@ -338,13 +369,58 @@
           who.className = "who";
           who.textContent = "Ned";
           div.appendChild(who);
-          div.appendChild(document.createTextNode(text));
+          const body = document.createElement("span");
+          body.className = "msg-text";
+          body.textContent = text;
+          div.appendChild(body);
+          div.appendChild(makeCopyButton(() => body.textContent));
         } else {
           div.textContent = text;
         }
         chatEl.appendChild(div);
         chatEl.scrollTop = chatEl.scrollHeight;
         return div;
+      }
+
+      // A small "Copy" button for Ned's answers. Uses the async Clipboard API
+      // where available (localhost/https) and falls back to execCommand for
+      // plain-http LAN access.
+      function makeCopyButton(getText) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "copy-btn";
+        btn.textContent = "Copy";
+        btn.title = "Copy Ned's answer to the clipboard";
+        btn.addEventListener("click", async () => {
+          const text = getText();
+          let ok = false;
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              await navigator.clipboard.writeText(text);
+              ok = true;
+            }
+          } catch {
+            ok = false;
+          }
+          if (!ok) {
+            try {
+              const ta = document.createElement("textarea");
+              ta.value = text;
+              ta.style.position = "fixed";
+              ta.style.opacity = "0";
+              document.body.appendChild(ta);
+              ta.focus();
+              ta.select();
+              ok = document.execCommand("copy");
+              document.body.removeChild(ta);
+            } catch {
+              ok = false;
+            }
+          }
+          btn.textContent = ok ? "Copied!" : "Copy failed";
+          setTimeout(() => (btn.textContent = "Copy"), 1500);
+        });
+        return btn;
       }
 
       // Opening line from Ned.
@@ -365,6 +441,8 @@
         sendBtn.disabled = true;
         sendBtn.textContent = "…";
         const thinking = addBubble("assistant", "gathering my thoughts…");
+        thinking.classList.add("pending"); // hides the copy button while waiting
+        const body = thinking.querySelector(".msg-text");
 
         try {
           const res = await fetch("/api/chat", {
@@ -375,16 +453,12 @@
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Request failed");
 
-          thinking.removeChild(thinking.lastChild);
-          thinking.appendChild(document.createTextNode(data.reply));
+          body.textContent = data.reply;
+          thinking.classList.remove("pending");
           history.push({ role: "assistant", content: data.reply });
         } catch (err) {
-          thinking.removeChild(thinking.lastChild);
-          thinking.appendChild(
-            document.createTextNode(
-              "Apologies — the line to the commentary box has dropped. Do try again."
-            )
-          );
+          body.textContent =
+            "Apologies — the line to the commentary box has dropped. Do try again.";
         } finally {
           sendBtn.disabled = false;
           sendBtn.textContent = "Send";
