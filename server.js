@@ -129,12 +129,21 @@ function sanitizeMessages(input) {
 module.exports = { createServer, sanitizeMessages };
 
 if (require.main === module) {
+  const os = require("os");
   const { chat, providerLabel } = require("./chat");
   const PORT = process.env.PORT || 3001;
+  // Bind to all interfaces by default (shareable on your LAN). Set HOST to
+  // 127.0.0.1 to restrict access to this machine only.
+  const HOST = process.env.HOST || "0.0.0.0";
   const server = createServer({ chat });
 
-  server.listen(PORT, () => {
+  server.listen(PORT, HOST, () => {
     console.log(`Tour de France chatbot running at http://localhost:${PORT}`);
+    if (HOST === "0.0.0.0" || HOST === "::") {
+      const lan = lanAddress(os);
+      if (lan) console.log(`On your network:  http://${lan}:${PORT}`);
+      console.log("(Open to your LAN — set HOST=127.0.0.1 to restrict to this machine.)");
+    }
     console.log(`Mode: ${providerLabel()}`);
   });
 
@@ -146,4 +155,14 @@ if (require.main === module) {
 
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
+}
+
+// First non-internal IPv4 address, for the "share on your network" hint.
+function lanAddress(os) {
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs || []) {
+      if (a.family === "IPv4" && !a.internal) return a.address;
+    }
+  }
+  return null;
 }

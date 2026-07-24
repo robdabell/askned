@@ -52,7 +52,33 @@ The chat "brain" auto-selects a provider based on environment variables
 | **Anthropic Claude** | `ANTHROPIC_API_KEY` (+ optional `ANTHROPIC_MODEL`) |
 | **Offline** | Set nothing — built-in canned responder |
 
-Other vars: `PORT` (default `3001`).
+### Local LLM fallback (free, offline)
+
+If the primary provider is **rate-limited or errors**, the app automatically
+retries a **local model** over a local OpenAI-compatible server before showing
+Ned's "catching its breath" message. Works with either:
+
+- **LM Studio** — load a model and start its *Local Server* (Developer tab).
+  Default URL `http://localhost:1234/v1`.
+- **Ollama** — `ollama serve` + `ollama pull llama3.2`, then set
+  `LOCAL_LLM_URL=http://localhost:11434/v1`.
+
+The model is **auto-detected** from whatever the local server has loaded (set
+`LOCAL_LLM_MODEL` to pin one). Disable with `LOCAL_LLM_FALLBACK=0`.
+
+**Auto-start:** if the primary is down and LM Studio isn't running, the app will
+try to start it (via the `lms` CLI) and load a model in the background, covering
+the gap with an "advert break" message — ask again once it's warmed up. Disable
+with `LOCAL_LLM_AUTOSTART=0`.
+
+### Sharing on your network
+
+By default the server binds to all interfaces, so others on your LAN can reach it
+at `http://<your-ip>:3001` (the startup log prints the address). There is **no
+authentication** — anyone who can reach it uses your API quota / local model, so
+only share on trusted networks. Set `HOST=127.0.0.1` to restrict to this machine.
+
+Other vars: `PORT` (default `3001`), `HOST` (default `0.0.0.0`).
 
 > **Never commit `.env`** — it holds your API key and is gitignored. Rotate any
 > key that has been shared or exposed.

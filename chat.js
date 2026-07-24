@@ -9,6 +9,10 @@
 // No SDK dependency: we call each HTTP API with the global fetch built into
 // Node 18+, keeping this app dependency-free.
 
+const { spawn, execFile } = require("child_process");
+const os = require("os");
+const path = require("path");
+const fs = require("fs");
 const { MODEL, SYSTEM_PROMPT, offlineReply } = require("./persona");
 const { buildContextBlock } = require("./race-context");
 const { stagesSummary } = require("./stages-2026");
@@ -47,6 +51,37 @@ const RATE_LIMIT_REPLY =
   "crossed Channel 5 start stumping up for a few more in a minute or so. Give me " +
   "a moment to get my breath back, then ask again.";
 
+// --- Local LLM fallback config ----------------------------------------------
+// When the primary provider is rate-limited or errors, we retry a free local
+// model over a local OpenAI-compatible server before giving up. Works with
+// LM Studio (default, :1234) or Ollama (:11434) — both speak the same API.
+// Enabled by default; set LOCAL_LLM_FALLBACK=0 to disable. If LOCAL_LLM_MODEL
+// is unset we auto-detect whichever model the local server currently has loaded.
+const LOCAL_LLM_URL = process.env.LOCAL_LLM_URL || "http://localhost:1234/v1";
+const LOCAL_LLM_MODEL = process.env.LOCAL_LLM_MODEL || ""; // "" = auto-detect
+const LOCAL_LLM_FALLBACK_ENABLED = process.env.LOCAL_LLM_FALLBACK !== "0";
+const FALLBACK_TIMEOUT_MS = 60000;
+const FALLBACK_NOTE =
+  "\n\n(Ned here, piping up from a local back-up model while the main service " +
+  "catches its breath.)";
+
+// Auto-start: if the local server/model isn't up when we need it, kick off
+// LM Studio via its `lms` CLI and cover the gap with an advert-break message.
+const LOCAL_LLM_AUTOSTART = process.env.LOCAL_LLM_AUTOSTART !== "0";
+const ADVERT_BREAK_REPLY =
+  "Advert break! A chance for David and I to get some nibbles while the local " +
+  "model warms up in the background. Give it a few seconds and ask me again — " +
+  "we'll be right back after these messages.";
+
+// Typed error so chat() can tell a rate-limit from a hard failure.
+class ProviderError extends Error {
+  constructor(message, { rateLimit = false } = {}) {
+    super(message);
+    this.name = "ProviderError";
+    this.rateLimit = rateLimit;
+  }
+}
+
 function selectProvider() {
   if (process.env.OPENAI_BASE_URL) return "openai";
   if (process.env.ANTHROPIC_API_KEY) return "anthropic";
@@ -55,13 +90,17 @@ function selectProvider() {
 
 // Human-readable label for the startup log.
 function providerLabel() {
+  const fb =
+    LOCAL_LLM_FALLBACK_ENABLED && selectProvider() !== "offline"
+      ? ` [local fallback: ${LOCAL_LLM_MODEL || "auto"} @ ${LOCAL_LLM_URL}]`
+      : "";
   switch (selectProvider()) {
     case "openai":
       return `OpenAI-compatible (${process.env.OPENAI_BASE_URL}, model ${
         process.env.OPENAI_MODEL || "not set"
-      })`;
+      })${fb}`;
     case "anthropic":
-      return `live (Claude API, model ${MODEL})`;
+      return `live (Claude API, model ${MODEL})${fb}`;
     default:
       return "offline (fallback responder)";
   }
@@ -69,16 +108,121 @@ function providerLabel() {
 
 // messages: [{ role: "user" | "assistant", content: string }, ...]
 async function chat(messages) {
-  switch (selectProvider()) {
-    case "openai":
-      return chatOpenAICompatible(messages);
-    case "anthropic":
-      return chatAnthropic(messages);
-    default: {
-      const lastUser = [...messages].reverse().find((m) => m.role === "user");
-      return offlineReply(lastUser && lastUser.content);
-    }
+  const provider = selectProvider();
+
+  if (provider === "offline") {
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    return offlineReply(lastUser && lastUser.content);
   }
+
+  try {
+    if (provider === "anthropic") return await chatAnthropic(messages);
+    return await callOpenAICompatible(messages, {
+      baseUrl: process.env.OPENAI_BASE_URL,
+      apiKey: process.env.OPENAI_API_KEY,
+      model: process.env.OPENAI_MODEL || "llama3.2",
+    });
+  } catch (err) {
+    // Primary failed (rate limit or error). Try a local model — unless the
+    // primary already IS a local endpoint (don't fall back onto ourselves).
+    const primaryIsLocal =
+      provider === "openai" &&
+      /\/\/(localhost|127\.0\.0\.1)/.test(process.env.OPENAI_BASE_URL || "");
+
+    if (LOCAL_LLM_FALLBACK_ENABLED && !primaryIsLocal) {
+      const model = await localModelReady();
+      if (model) {
+        // Local server is up with a model — let it answer.
+        try {
+          const reply = await callOpenAICompatible(messages, {
+            baseUrl: LOCAL_LLM_URL,
+            apiKey: "local",
+            model,
+            timeoutMs: FALLBACK_TIMEOUT_MS,
+          });
+          return reply + FALLBACK_NOTE;
+        } catch {
+          /* local errored — fall through */
+        }
+      } else if (startLocalLLM()) {
+        // Local server/model isn't up yet; we've kicked it off. Cover the gap.
+        return ADVERT_BREAK_REPLY;
+      }
+    }
+
+    if (err && err.rateLimit) return RATE_LIMIT_REPLY;
+    throw err;
+  }
+}
+
+// Is the local server up with a usable (non-embedding) chat model? Returns the
+// model id to use, or null if the server is down / still loading.
+async function localModelReady() {
+  try {
+    const res = await fetch(`${LOCAL_LLM_URL.replace(/\/+$/, "")}/models`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const ids = (data.data || []).map((m) => m.id).filter(Boolean);
+    if (LOCAL_LLM_MODEL) return ids.includes(LOCAL_LLM_MODEL) ? LOCAL_LLM_MODEL : null;
+    return ids.find((id) => !/embed/i.test(id)) || null;
+  } catch {
+    return null;
+  }
+}
+
+// Fire-and-forget: start the LM Studio server (idempotent) and load a model via
+// its `lms` CLI. Debounced so we don't spawn repeatedly. Returns true if an
+// attempt was made (or is in flight), false if auto-start is off/unavailable.
+let lastStartAttempt = 0;
+function startLocalLLM() {
+  if (!LOCAL_LLM_AUTOSTART) return false;
+  const now = Date.now();
+  if (now - lastStartAttempt < 120000) return true; // recently attempted
+  const lms = lmsBinary();
+  if (!lms) return false;
+  lastStartAttempt = now;
+
+  detachedSpawn(lms, ["server", "start"]);
+  if (LOCAL_LLM_MODEL) {
+    detachedSpawn(lms, ["load", LOCAL_LLM_MODEL, "-y", "--ttl", "3600"]);
+  } else {
+    // Discover the first downloaded LLM, then load it.
+    execFile(lms, ["ls"], { timeout: 10000 }, (e, stdout) => {
+      const key = !e && stdout ? firstDownloadedModel(stdout) : null;
+      if (key) detachedSpawn(lms, ["load", key, "-y", "--ttl", "3600"]);
+    });
+  }
+  return true;
+}
+
+function detachedSpawn(cmd, args) {
+  try {
+    const p = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    p.on("error", () => {}); // ignore (e.g. binary missing)
+    p.unref();
+  } catch {
+    /* ignore */
+  }
+}
+
+// Locate the LM Studio CLI (`lms`), or null if not found.
+function lmsBinary() {
+  if (process.env.LMS_PATH) return process.env.LMS_PATH;
+  const guess = path.join(os.homedir(), ".lmstudio", "bin", "lms");
+  return fs.existsSync(guess) ? guess : null;
+}
+
+// Parse `lms ls` output for the first downloaded LLM key (e.g. "google/gemma-4-e4b").
+function firstDownloadedModel(lsOutput) {
+  for (const line of lsOutput.split("\n")) {
+    const t = line.trim();
+    if (!t || /^(LLM|EMBEDDING|PARAMS|You have)/i.test(t)) continue;
+    const key = t.split(" (")[0].split(/\s{2,}/)[0].trim();
+    if (key && key.includes("/") && !/embed/i.test(key)) return key;
+  }
+  return null;
 }
 
 async function chatAnthropic(messages) {
@@ -90,18 +234,13 @@ async function chatAnthropic(messages) {
       "x-api-key": process.env.ANTHROPIC_API_KEY,
       "anthropic-version": ANTHROPIC_VERSION,
     },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      system,
-      messages,
-    }),
+    body: JSON.stringify({ model: MODEL, max_tokens: MAX_TOKENS, system, messages }),
   });
 
-  if (res.status === 429) return RATE_LIMIT_REPLY;
+  if (res.status === 429) throw new ProviderError("Claude rate limited", { rateLimit: true });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new Error(`Claude API error ${res.status}: ${detail.slice(0, 500)}`);
+    throw new ProviderError(`Claude API error ${res.status}: ${detail.slice(0, 300)}`);
   }
 
   const data = await res.json();
@@ -116,30 +255,28 @@ async function chatAnthropic(messages) {
 
 // Works with any endpoint that speaks the OpenAI /chat/completions shape:
 // Ollama (http://localhost:11434/v1), Groq, Gemini's OpenAI endpoint, etc.
-async function chatOpenAICompatible(messages) {
-  const baseUrl = process.env.OPENAI_BASE_URL.replace(/\/+$/, "");
-  // Ollama ignores the key, but some servers require the header to exist.
-  const apiKey = process.env.OPENAI_API_KEY || "not-needed";
-  const model = process.env.OPENAI_MODEL || "llama3.2";
+async function callOpenAICompatible(messages, { baseUrl, apiKey, model, timeoutMs }) {
+  const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const system = await systemPrompt();
 
-  const res = await fetch(`${baseUrl}/chat/completions`, {
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${apiKey || "not-needed"}`,
     },
     body: JSON.stringify({
       model,
       max_tokens: MAX_TOKENS,
       messages: [{ role: "system", content: system }, ...messages],
     }),
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   });
 
-  if (res.status === 429) return RATE_LIMIT_REPLY;
+  if (res.status === 429) throw new ProviderError("LLM rate limited", { rateLimit: true });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new Error(`LLM API error ${res.status}: ${detail.slice(0, 500)}`);
+    throw new ProviderError(`LLM API error ${res.status}: ${detail.slice(0, 300)}`);
   }
 
   const data = await res.json();
