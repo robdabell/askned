@@ -1,5 +1,7 @@
 # Ask Ned 🚴‍♂️🟡
 
+[![CI](https://github.com/robdabell/askned/actions/workflows/ci.yml/badge.svg)](https://github.com/robdabell/askned/actions/workflows/ci.yml)
+
 A small, dependency-free chatbot web app that answers questions about the
 **Tour de France** in the warm, witty, self-deprecating voice of British cycling
 commentator **Ned Boulting**.
@@ -20,7 +22,8 @@ commentator **Ned Boulting**.
 
 ## Requirements
 
-- Node.js **>= 18** (uses the built-in `http` and global `fetch`; no `npm install` needed).
+- Node.js **>= 20.12** (uses the built-in `http`, global `fetch`, and the
+  `--env-file-if-exists` flag; no `npm install` needed).
 
 ## Quick start
 
@@ -82,6 +85,27 @@ Other vars: `PORT` (default `3001`), `HOST` (default `0.0.0.0`).
 
 > **Never commit `.env`** — it holds your API key and is gitignored. Rotate any
 > key that has been shared or exposed.
+
+## Architecture — the fallback chain
+
+Every `POST /api/chat` runs through a resilience chain so a rate-limited free
+tier never leaves Ned speechless:
+
+```mermaid
+flowchart TD
+    U["User asks Ned"] --> S["server.js · /api/chat"]
+    S --> P{"Primary provider<br/>(Gemini / Claude / OpenAI-compatible)"}
+    P -->|success| R["Reply in Ned's voice"]
+    P -->|rate-limit or error| L{"Local LLM up<br/>with a model?"}
+    L -->|yes| LR["Answer via LM Studio / Ollama<br/>+ 'local back-up model' note"] --> R
+    L -->|no| A{"Auto-start on<br/>& lms CLI found?"}
+    A -->|yes| ST["Start LM Studio + load a model<br/>(background)"] --> AB["'Advert break!' message<br/>— ask again once warm"]
+    A -->|no| RL["'ITV tokens / catching its breath'<br/>message"]
+```
+
+Alongside this, every reply is grounded with **live context**: the current
+year's Tour de France article (Wikipedia), the official 2026 stage list
+(letour.fr) and the curated source list — all injected into Ned's system prompt.
 
 ## Project layout
 
