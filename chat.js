@@ -9,7 +9,7 @@
 // No SDK dependency: we call each HTTP API with the global fetch built into
 // Node 18+, keeping this app dependency-free.
 
-const { spawn, execFile } = require("child_process");
+const { spawn, execFile, execFileSync } = require("child_process");
 const os = require("os");
 const path = require("path");
 const fs = require("fs");
@@ -176,6 +176,7 @@ async function localModelReady() {
 // its `lms` CLI. Debounced so we don't spawn repeatedly. Returns true if an
 // attempt was made (or is in flight), false if auto-start is off/unavailable.
 let lastStartAttempt = 0;
+let weStartedLocal = false; // true only if this process started LM Studio
 function startLocalLLM() {
   if (!LOCAL_LLM_AUTOSTART) return false;
   const now = Date.now();
@@ -183,6 +184,7 @@ function startLocalLLM() {
   const lms = lmsBinary();
   if (!lms) return false;
   lastStartAttempt = now;
+  weStartedLocal = true;
 
   detachedSpawn(lms, ["server", "start"]);
   if (LOCAL_LLM_MODEL) {
@@ -205,6 +207,27 @@ function detachedSpawn(cmd, args) {
   } catch {
     /* ignore */
   }
+}
+
+// Stop LM Studio — but ONLY if this process started it (don't kill a server
+// the user was already running). Called on graceful shutdown. Synchronous so
+// it completes before the process exits.
+function stopLocalLLM() {
+  if (!weStartedLocal) return false;
+  const lms = lmsBinary();
+  if (!lms) return false;
+  try {
+    execFileSync(lms, ["unload", "--all"], { timeout: 8000, stdio: "ignore" });
+  } catch {
+    /* ignore */
+  }
+  try {
+    execFileSync(lms, ["server", "stop"], { timeout: 8000, stdio: "ignore" });
+  } catch {
+    /* ignore */
+  }
+  weStartedLocal = false;
+  return true;
 }
 
 // Locate the LM Studio CLI (`lms`), or null if not found.
@@ -280,16 +303,22 @@ async function callOpenAICompatible(messages, { baseUrl, apiKey, model, timeoutM
   }
 
   const data = await res.json();
-  const text = (
-    data.choices &&
+  const text = sanitizeReply(
+    (data.choices &&
     data.choices[0] &&
     data.choices[0].message &&
     data.choices[0].message.content
       ? data.choices[0].message.content
-      : ""
-  ).trim();
+      : "")
+  );
 
   return text || "…I appear to have lost my thread entirely. Ask me again?";
 }
 
-module.exports = { chat, providerLabel };
+// Strip stray chat-template control tokens (e.g. "<|channel>", "<|im_start|>")
+// that small local models sometimes leak into their output.
+function sanitizeReply(text) {
+  return text.replace(/<\|[^|>]*\|?>/g, "").trim();
+}
+
+module.exports = { chat, providerLabel, stopLocalLLM };

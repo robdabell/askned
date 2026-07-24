@@ -215,6 +215,22 @@
       .route-links {
         margin: 0 0 0.6rem;
       }
+      .route-sources {
+        margin: 0 0 0.6rem;
+        font-size: 0.82rem;
+        color: var(--muted);
+      }
+      .route-sources a {
+        color: var(--user);
+        text-decoration: none;
+      }
+      .route-sources a:hover {
+        text-decoration: underline;
+      }
+      .route-sources .sep {
+        opacity: 0.5;
+        margin: 0 0.15rem;
+      }
 
       /* Sources list */
       .src-group {
@@ -291,6 +307,7 @@
         <!-- Official route map image (default view + per-stage fallback) -->
         <img id="routeMap" class="route-map" alt="Official Tour de France 2026 route map" />
         <p id="routeNote" class="route-note"></p>
+        <p id="routeSources" class="route-sources"></p>
         <p class="route-links">
           <a id="pdfLink" href="https://www.letour.fr/en/overall-route" target="_blank" rel="noopener">Download official route (PDF) ↗</a>
         </p>
@@ -402,9 +419,45 @@
       const pdfLink = document.getElementById("pdfLink");
 
       const vvEmbedUrl = (id) => `https://veloviewer.com/routes/${id}/embed2`;
+      const routeSourcesEl = document.getElementById("routeSources");
 
       function stageOptionLabel(s) {
         return `Stage ${s.n} · ${s.from} → ${s.to} · ${s.km} km (${s.type})`;
+      }
+
+      // Multiple providers to view a stage's route/profile — keeps VeloViewer
+      // alongside official and data sources.
+      function renderRouteSources(links) {
+        routeSourcesEl.textContent = "View route & profile on: ";
+        links.forEach((l, i) => {
+          if (i) {
+            const sep = document.createElement("span");
+            sep.className = "sep";
+            sep.textContent = "·";
+            routeSourcesEl.appendChild(sep);
+          }
+          const a = document.createElement("a");
+          a.href = l.url;
+          a.target = "_blank";
+          a.rel = "noopener";
+          a.textContent = l.label;
+          routeSourcesEl.appendChild(a);
+        });
+      }
+
+      const gSearch = (q) =>
+        `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+
+      function stageSourceLinks(stage) {
+        return [
+          { label: "letour.fr", url: stage.letourUrl },
+          {
+            label: "ProCyclingStats",
+            url: `https://www.procyclingstats.com/race/tour-de-france/2026/stage-${stage.n}`,
+          },
+          { label: "VeloViewer", url: gSearch(`site:veloviewer.com Tour de France 2026 Stage ${stage.n}`) },
+          { label: "la Flamme Rouge", url: gSearch(`site:la-flamme-rouge.eu Tour de France 2026 stage ${stage.n}`) },
+        ];
       }
 
       function showOverall(officialRouteMap) {
@@ -416,6 +469,12 @@
         routeNote.textContent = "";
         stageLink.href = "https://www.letour.fr/en/overall-route";
         stageLink.textContent = "Official route page ↗";
+        renderRouteSources([
+          { label: "letour.fr", url: "https://www.letour.fr/en/overall-route" },
+          { label: "ProCyclingStats", url: "https://www.procyclingstats.com/race/tour-de-france/2026" },
+          { label: "VeloViewer", url: gSearch("site:veloviewer.com Tour de France 2026") },
+          { label: "cyclingstage", url: "https://www.cyclingstage.com/tour-de-france-2026-route/" },
+        ]);
       }
 
       function showStage(stage, officialRouteMap) {
@@ -424,6 +483,7 @@
           `${stage.km} km · ${stage.type}`;
         stageLink.href = stage.letourUrl;
         stageLink.textContent = `Official Stage ${stage.n} page ↗`;
+        renderRouteSources(stageSourceLinks(stage));
 
         routeMap.hidden = true;
         routeEmbedWrap.hidden = false;

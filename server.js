@@ -130,7 +130,7 @@ module.exports = { createServer, sanitizeMessages };
 
 if (require.main === module) {
   const os = require("os");
-  const { chat, providerLabel } = require("./chat");
+  const { chat, providerLabel, stopLocalLLM } = require("./chat");
   const PORT = process.env.PORT || 3001;
   // Bind to all interfaces by default (shareable on your LAN). Set HOST to
   // 127.0.0.1 to restrict access to this machine only.
@@ -149,6 +149,12 @@ if (require.main === module) {
 
   function shutdown() {
     console.log("Shutting down...");
+    // Stop LM Studio if (and only if) we auto-started it.
+    try {
+      if (stopLocalLLM()) console.log("Stopped auto-started LM Studio.");
+    } catch {
+      /* ignore */
+    }
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 5000);
   }
